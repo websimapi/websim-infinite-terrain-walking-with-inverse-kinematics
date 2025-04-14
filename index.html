@@ -50,8 +50,9 @@
         const terrain = [];
         const terrainSegmentWidth = 20;
         const terrainSegmentsOnScreen = Math.ceil(canvas.width / terrainSegmentWidth) + 5;
-        let worldOffset = 0; // Tracks how far into the world we've moved
-        let leftmostTerrainX = 0; // Track the leftmost point of our terrain
+        const MAX_TERRAIN_SEGMENTS = terrainSegmentsOnScreen * 4; 
+        let worldOffset = 0; 
+        let leftmostTerrainX = 0;
         
         // Generate initial terrain
         function generateInitialTerrain() {
@@ -63,38 +64,35 @@
             // Start with negative indices to have terrain to the left
             for (let i = -initialSegments/2; i < initialSegments/2; i++) {
                 // Base height with multiple sine waves for more interesting terrain
-                let height = canvas.height - 100;
-                height += Math.sin(i * 0.1) * 30;
-                height += Math.sin(i * 0.05) * 50;
-                height += Math.sin(i * 0.02) * 20;
-                
-                // Add some noise
-                height += Math.random() * 5 - 2.5;
-                
-                terrain.push(height);
+                const x = i * terrainSegmentWidth;
+                terrain.push(generateTerrainPoint(x));
             }
             
             // Initialize leftmost terrain point
             leftmostTerrainX = -initialSegments/2 * terrainSegmentWidth;
         }
         
-        // Generate new terrain to the right
-        function extendTerrainRight() {
-            // Get the last terrain point's index
-            const lastIndex = terrain.length - 1;
-            const x = leftmostTerrainX + terrain.length * terrainSegmentWidth;
-            
-            // Generate a new terrain point
+        // Generate terrain point height based on x coordinate
+        function generateTerrainPoint(x) {
+            // Use a modulo to avoid precision issues with large x values
+            const normalizedX = x % 10000;
             let height = canvas.height - 100;
-            height += Math.sin(x * 0.1 / terrainSegmentWidth) * 30;
-            height += Math.sin(x * 0.05 / terrainSegmentWidth) * 50;
-            height += Math.sin(x * 0.02 / terrainSegmentWidth) * 20;
+            height += Math.sin(normalizedX * 0.01) * 30;
+            height += Math.sin(normalizedX * 0.005) * 50;
+            height += Math.sin(normalizedX * 0.002) * 20;
             height += Math.random() * 5 - 2.5;
             
-            terrain.push(height);
+            // Ensure height is reasonable to prevent crashes
+            return Math.max(100, Math.min(canvas.height - 20, height));
+        }
+        
+        // Generate new terrain to the right
+        function extendTerrainRight() {
+            const x = leftmostTerrainX + terrain.length * terrainSegmentWidth;
+            terrain.push(generateTerrainPoint(x));
             
             // Remove one from the beginning if we're getting too large
-            if (terrain.length > terrainSegmentsOnScreen * 4) {
+            if (terrain.length > MAX_TERRAIN_SEGMENTS) {
                 terrain.shift();
                 leftmostTerrainX += terrainSegmentWidth;
             }
@@ -104,47 +102,56 @@
         function extendTerrainLeft() {
             // Generate a new terrain point to the left
             const x = leftmostTerrainX - terrainSegmentWidth;
-            
-            // Generate using the same formula for consistency
-            let height = canvas.height - 100;
-            height += Math.sin(x * 0.1 / terrainSegmentWidth) * 30;
-            height += Math.sin(x * 0.05 / terrainSegmentWidth) * 50;
-            height += Math.sin(x * 0.02 / terrainSegmentWidth) * 20;
-            height += Math.random() * 5 - 2.5;
-            
-            terrain.unshift(height);
+            terrain.unshift(generateTerrainPoint(x));
             leftmostTerrainX = x;
             
             // Remove one from the end if we're getting too large
-            if (terrain.length > terrainSegmentsOnScreen * 4) {
+            if (terrain.length > MAX_TERRAIN_SEGMENTS) {
                 terrain.pop();
             }
         }
         
-        // Get terrain height at any x position
+        // Get terrain height at any x position - non-recursive implementation
         function getTerrainHeight(worldX) {
             // Find which terrain segment this x position falls into
             const segmentIndex = Math.floor((worldX - leftmostTerrainX) / terrainSegmentWidth);
             
-            // If we need terrain to the left, generate it
+            // Generate terrain to the left if needed (non-recursive approach)
             if (segmentIndex < 0) {
-                // Generate terrain to the left until we have what we need
-                while (segmentIndex < 0) {
+                const neededSegments = Math.abs(segmentIndex);
+                for (let i = 0; i < neededSegments; i++) {
                     extendTerrainLeft();
                 }
-                return getTerrainHeight(worldX); // Recalculate now that we have the terrain
+                // Recalculate segment index after extending terrain
+                const newSegmentIndex = Math.floor((worldX - leftmostTerrainX) / terrainSegmentWidth);
+                
+                if (newSegmentIndex < 0 || newSegmentIndex >= terrain.length) {
+                    // Safeguard against any remaining issues
+                    return canvas.height - 100;
+                }
+                
+                return interpolateHeight(worldX, newSegmentIndex);
             }
             
             // If we need terrain to the right, generate it
             if (segmentIndex >= terrain.length - 1) {
-                // Generate terrain to the right until we have what we need
-                while (segmentIndex >= terrain.length - 1) {
+                const neededSegments = segmentIndex - (terrain.length - 2);
+                for (let i = 0; i < neededSegments; i++) {
                     extendTerrainRight();
                 }
             }
             
+            return interpolateHeight(worldX, segmentIndex);
+        }
+        
+        // Helper function to interpolate terrain height
+        function interpolateHeight(worldX, segmentIndex) {
+            // Safety checks
+            if (segmentIndex < 0) segmentIndex = 0;
+            if (segmentIndex >= terrain.length - 1) segmentIndex = terrain.length - 2;
+            
             // Calculate the exact height using linear interpolation
-            const nextSegmentIndex = Math.min(segmentIndex + 1, terrain.length - 1);
+            const nextSegmentIndex = segmentIndex + 1;
             const segmentStartX = leftmostTerrainX + segmentIndex * terrainSegmentWidth;
             const t = (worldX - segmentStartX) / terrainSegmentWidth;
             
@@ -153,7 +160,7 @@
         
         // Draw terrain
         function drawTerrain() {
-            ctx.fillStyle = '#3b5323'; // Forest green
+            ctx.fillStyle = '#3b5323'; 
             ctx.beginPath();
             ctx.moveTo(0, canvas.height);
             
@@ -200,13 +207,13 @@
         
         // Character
         const character = {
-            worldX: 300, // Absolute position in the world
+            worldX: 300, 
             y: 0,
             width: BODY_WIDTH,
             height: BODY_HEIGHT,
             speed: WALK_SPEED,
-            direction: 1, // 1 for right, -1 for left
-            legPhase: 0, // For walking animation
+            direction: 1, 
+            legPhase: 0, 
             
             // Legs
             leftLeg: {
@@ -234,124 +241,147 @@
                 // Update position in world space
                 this.worldX += this.speed * this.direction;
                 
-                // Set character height based on terrain
-                const terrainY = getTerrainHeight(this.worldX);
-                this.y = terrainY - this.height;
-                
-                // Update leg phases
-                this.legPhase += 0.05;
-                this.leftLeg.phase = this.legPhase;
-                this.rightLeg.phase = this.legPhase + Math.PI;
-                
-                // Update legs
-                this.updateLeg(this.leftLeg, -this.width / 2);
-                this.updateLeg(this.rightLeg, this.width / 2);
-                
-                // Update camera target
-                camera.targetX = this.worldX - canvas.width / 2;
+                try {
+                    // Set character height based on terrain with error handling
+                    const terrainY = getTerrainHeight(this.worldX);
+                    if (!isNaN(terrainY) && isFinite(terrainY)) {
+                        this.y = terrainY - this.height;
+                    }
+                    
+                    // Update leg phases
+                    this.legPhase += 0.05;
+                    this.leftLeg.phase = this.legPhase;
+                    this.rightLeg.phase = this.legPhase + Math.PI;
+                    
+                    // Update legs with error handling
+                    this.updateLeg(this.leftLeg, -this.width / 2);
+                    this.updateLeg(this.rightLeg, this.width / 2);
+                    
+                    // Update camera target
+                    camera.targetX = this.worldX - canvas.width / 2;
+                } catch (e) {
+                    console.error("Error in character update:", e);
+                    // Continue execution but don't update this frame
+                }
             },
             
             updateLeg: function(leg, hipOffset) {
-                // Hip position (in world space)
-                const worldHipX = this.worldX + hipOffset;
-                leg.hipY = this.y + this.height * 0.4;
-                
-                // Calculate foot target
-                const strideLength = 30;
-                const footForwardOffset = Math.sin(leg.phase) * strideLength;
-                const worldFootX = worldHipX + footForwardOffset;
-                
-                // Get terrain height at foot x position
-                const terrainY = getTerrainHeight(worldFootX);
-                
-                // Set foot height based on stride phase
-                let footLiftHeight = 0;
-                if (Math.sin(leg.phase) < 0) {
-                    // Foot is in the air during back half of the stride
-                    footLiftHeight = Math.sin(leg.phase + Math.PI) * 20;
+                try {
+                    // Hip position (in world space)
+                    const worldHipX = this.worldX + hipOffset;
+                    leg.hipY = this.y + this.height * 0.4;
+                    
+                    // Calculate foot target
+                    const strideLength = 30;
+                    const footForwardOffset = Math.sin(leg.phase) * strideLength;
+                    const worldFootX = worldHipX + footForwardOffset;
+                    
+                    // Get terrain height at foot x position
+                    const terrainY = getTerrainHeight(worldFootX);
+                    
+                    // Check for NaN or Infinity before using the terrain height
+                    if (isNaN(terrainY) || !isFinite(terrainY)) {
+                        return; // Skip this update
+                    }
+                    
+                    // Set foot height based on stride phase
+                    let footLiftHeight = 0;
+                    if (Math.sin(leg.phase) < 0) {
+                        // Foot is in the air during back half of the stride
+                        footLiftHeight = Math.sin(leg.phase + Math.PI) * 20;
+                    }
+                    
+                    const targetFootY = terrainY - footLiftHeight;
+                    
+                    // Store world coordinates
+                    leg.worldHipX = worldHipX;
+                    leg.worldFootX = worldFootX;
+                    
+                    // Convert world coordinates to screen coordinates for rendering
+                    leg.hipX = worldHipX - camera.x;
+                    leg.footY = targetFootY;
+                    
+                    // Solve inverse kinematics
+                    const hipToFoot = {
+                        x: worldFootX - worldHipX,
+                        y: targetFootY - leg.hipY
+                    };
+                    
+                    const hipToFootDistance = Math.sqrt(hipToFoot.x * hipToFoot.x + hipToFoot.y * hipToFoot.y);
+                    
+                    // Clamp distance to prevent overstretching
+                    const maxDistance = LEG_UPPER_LENGTH + LEG_LOWER_LENGTH - 1;
+                    const minDistance = Math.abs(LEG_UPPER_LENGTH - LEG_LOWER_LENGTH) + 1;
+                    
+                    let clampedDistance = Math.max(minDistance, Math.min(hipToFootDistance, maxDistance));
+                    
+                    // Calculate knee angle using law of cosines
+                    const upperAngle = Math.atan2(hipToFoot.y, hipToFoot.x);
+                    const cosArg = (LEG_UPPER_LENGTH * LEG_UPPER_LENGTH + clampedDistance * clampedDistance - LEG_LOWER_LENGTH * LEG_LOWER_LENGTH) / 
+                        (2 * LEG_UPPER_LENGTH * clampedDistance);
+                    
+                    // Ensure the argument is in valid range for Math.acos
+                    const clampedCosArg = Math.max(-1, Math.min(1, cosArg));
+                    const kneeAngle = Math.acos(clampedCosArg);
+                    
+                    // Calculate knee position (in world space)
+                    const worldKneeX = worldHipX + Math.cos(upperAngle + kneeAngle) * LEG_UPPER_LENGTH;
+                    leg.kneeY = leg.hipY + Math.sin(upperAngle + kneeAngle) * LEG_UPPER_LENGTH;
+                    
+                    // Convert to screen coordinates for rendering
+                    leg.kneeX = worldKneeX - camera.x;
+                    leg.footX = worldFootX - camera.x;
+                } catch (e) {
+                    console.error("Error in updateLeg:", e);
+                    // Continue execution
                 }
-                
-                const targetFootY = terrainY - footLiftHeight;
-                
-                // Store world coordinates
-                leg.worldHipX = worldHipX;
-                leg.worldFootX = worldFootX;
-                
-                // Convert world coordinates to screen coordinates for rendering
-                leg.hipX = worldHipX - camera.x;
-                leg.footY = targetFootY;
-                
-                // Solve inverse kinematics
-                const hipToFoot = {
-                    x: worldFootX - worldHipX,
-                    y: targetFootY - leg.hipY
-                };
-                
-                const hipToFootDistance = Math.sqrt(hipToFoot.x * hipToFoot.x + hipToFoot.y * hipToFoot.y);
-                
-                // Clamp distance to prevent overstretching
-                const maxDistance = LEG_UPPER_LENGTH + LEG_LOWER_LENGTH - 1;
-                const minDistance = Math.abs(LEG_UPPER_LENGTH - LEG_LOWER_LENGTH) + 1;
-                
-                let clampedDistance = Math.max(minDistance, Math.min(hipToFootDistance, maxDistance));
-                
-                // Calculate knee angle using law of cosines
-                const upperAngle = Math.atan2(hipToFoot.y, hipToFoot.x);
-                const kneeAngle = Math.acos(
-                    (LEG_UPPER_LENGTH * LEG_UPPER_LENGTH + clampedDistance * clampedDistance - LEG_LOWER_LENGTH * LEG_LOWER_LENGTH) / 
-                    (2 * LEG_UPPER_LENGTH * clampedDistance)
-                );
-                
-                // Calculate knee position (in world space)
-                const worldKneeX = worldHipX + Math.cos(upperAngle + kneeAngle) * LEG_UPPER_LENGTH;
-                leg.kneeY = leg.hipY + Math.sin(upperAngle + kneeAngle) * LEG_UPPER_LENGTH;
-                
-                // Convert to screen coordinates for rendering
-                leg.kneeX = worldKneeX - camera.x;
-                leg.footX = worldFootX - camera.x;
             },
             
             draw: function() {
-                // Calculate screen position
-                const screenX = this.worldX - camera.x;
-                
-                // Draw legs
-                ctx.lineWidth = 8;
-                ctx.lineCap = 'round';
-                
-                // Draw left leg
-                ctx.strokeStyle = '#555';
-                ctx.beginPath();
-                ctx.moveTo(this.leftLeg.hipX, this.leftLeg.hipY);
-                ctx.lineTo(this.leftLeg.kneeX, this.leftLeg.kneeY);
-                ctx.lineTo(this.leftLeg.footX, this.leftLeg.footY);
-                ctx.stroke();
-                
-                // Draw right leg
-                ctx.beginPath();
-                ctx.moveTo(this.rightLeg.hipX, this.rightLeg.hipY);
-                ctx.lineTo(this.rightLeg.kneeX, this.rightLeg.kneeY);
-                ctx.lineTo(this.rightLeg.footX, this.rightLeg.footY);
-                ctx.stroke();
-                
-                // Draw body
-                ctx.fillStyle = '#444';
-                ctx.beginPath();
-                ctx.ellipse(screenX, this.y + this.height * 0.3, this.width, this.height * 0.3, 0, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Draw head
-                ctx.fillStyle = '#666';
-                ctx.beginPath();
-                ctx.arc(screenX, this.y, 15, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Draw eyes (facing the direction of movement)
-                ctx.fillStyle = 'white';
-                const eyeOffset = 5 * this.direction;
-                ctx.beginPath();
-                ctx.arc(screenX + eyeOffset, this.y - 3, 3, 0, Math.PI * 2);
-                ctx.fill();
+                try {
+                    // Calculate screen position
+                    const screenX = this.worldX - camera.x;
+                    
+                    // Draw legs
+                    ctx.lineWidth = 8;
+                    ctx.lineCap = 'round';
+                    
+                    // Draw left leg
+                    ctx.strokeStyle = '#555';
+                    ctx.beginPath();
+                    ctx.moveTo(this.leftLeg.hipX, this.leftLeg.hipY);
+                    ctx.lineTo(this.leftLeg.kneeX, this.leftLeg.kneeY);
+                    ctx.lineTo(this.leftLeg.footX, this.leftLeg.footY);
+                    ctx.stroke();
+                    
+                    // Draw right leg
+                    ctx.beginPath();
+                    ctx.moveTo(this.rightLeg.hipX, this.rightLeg.hipY);
+                    ctx.lineTo(this.rightLeg.kneeX, this.rightLeg.kneeY);
+                    ctx.lineTo(this.rightLeg.footX, this.rightLeg.footY);
+                    ctx.stroke();
+                    
+                    // Draw body
+                    ctx.fillStyle = '#444';
+                    ctx.beginPath();
+                    ctx.ellipse(screenX, this.y + this.height * 0.3, this.width, this.height * 0.3, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Draw head
+                    ctx.fillStyle = '#666';
+                    ctx.beginPath();
+                    ctx.arc(screenX, this.y, 15, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Draw eyes (facing the direction of movement)
+                    ctx.fillStyle = 'white';
+                    const eyeOffset = 5 * this.direction;
+                    ctx.beginPath();
+                    ctx.arc(screenX + eyeOffset, this.y - 3, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                } catch (e) {
+                    console.error("Error in character draw:", e);
+                }
             }
         };
         
@@ -367,67 +397,87 @@
             });
         }
         
-        // Animation loop
-        function animate() {
-            // Update camera with smooth follow
-            camera.x += (camera.targetX - camera.x) * camera.smoothing;
+        // Draw clouds function
+        function drawClouds() {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
             
-            // Make sure we have enough terrain ahead and behind
-            const leftScreenWorldX = camera.x - terrainSegmentWidth;
-            const rightScreenWorldX = camera.x + canvas.width + terrainSegmentWidth;
-            
-            // Get terrain height at these positions to ensure terrain exists
-            getTerrainHeight(leftScreenWorldX);
-            getTerrainHeight(rightScreenWorldX);
-            
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            // Draw sky gradient
-            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-            gradient.addColorStop(0, '#1e90ff');
-            gradient.addColorStop(1, '#87CEEB');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Draw clouds that move with the camera but at a parallax rate
-            function drawClouds() {
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            for (const cloud of clouds) {
+                // Parallax effect - clouds move at a fraction of camera speed
+                const parallaxX = cloud.x - camera.x * 0.3;
                 
-                for (const cloud of clouds) {
-                    // Parallax effect - clouds move at a fraction of camera speed
-                    const parallaxX = cloud.x - camera.x * 0.3;
-                    
-                    // If cloud is too far left, move it far to the right
-                    if (parallaxX < -cloud.width - 100) {
-                        cloud.x = camera.x * 0.3 + canvas.width + cloud.width + Math.random() * 200;
-                        cloud.y = Math.random() * 120 + 20;
-                    }
-                    
-                    // Draw the cloud
-                    ctx.beginPath();
-                    ctx.ellipse(parallaxX, cloud.y, cloud.width/2, cloud.height/2, 0, 0, Math.PI * 2);
-                    ctx.fill();
+                // If cloud is too far left, move it far to the right
+                if (parallaxX < -cloud.width - 100) {
+                    cloud.x = camera.x * 0.3 + canvas.width + cloud.width + Math.random() * 200;
+                    cloud.y = Math.random() * 120 + 20;
                 }
+                
+                // Draw the cloud
+                ctx.beginPath();
+                ctx.ellipse(parallaxX, cloud.y, cloud.width/2, cloud.height/2, 0, 0, Math.PI * 2);
+                ctx.fill();
             }
-            drawClouds();
-            
-            drawTerrain();
-            character.update();
-            character.draw();
-            
-            // Display distance traveled
-            ctx.font = '16px Arial';
-            ctx.fillStyle = 'white';
-            ctx.fillText(`Distance traveled: ${Math.floor(character.worldX)} units`, 20, 30);
-            
-            requestAnimationFrame(animate);
+        }
+        
+        // Animation loop with error handling
+        function animate() {
+            try {
+                // Update camera with smooth follow
+                camera.x += (camera.targetX - camera.x) * camera.smoothing;
+                
+                // Make sure we have enough terrain ahead and behind
+                const leftScreenWorldX = camera.x - terrainSegmentWidth;
+                const rightScreenWorldX = camera.x + canvas.width + terrainSegmentWidth;
+                
+                // Get terrain height at these positions to ensure terrain exists
+                getTerrainHeight(leftScreenWorldX);
+                getTerrainHeight(rightScreenWorldX);
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Draw sky gradient
+                const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                gradient.addColorStop(0, '#1e90ff');
+                gradient.addColorStop(1, '#87CEEB');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                // Draw clouds that move with the camera but at a parallax rate
+                drawClouds();
+                
+                drawTerrain();
+                character.update();
+                character.draw();
+                
+                // Display distance traveled
+                ctx.font = '16px Arial';
+                ctx.fillStyle = 'white';
+                ctx.fillText(`Distance traveled: ${Math.floor(character.worldX)} units`, 20, 30);
+                
+                requestAnimationFrame(animate);
+            } catch (e) {
+                console.error("Animation error:", e);
+                // Try to recover and continue
+                requestAnimationFrame(animate);
+            }
         }
         
         // Initialize the game
         function init() {
-            generateInitialTerrain();
-            animate();
+            try {
+                generateInitialTerrain();
+                animate();
+            } catch (e) {
+                console.error("Initialization error:", e);
+                // Try to restart if there's an error during initialization
+                setTimeout(init, 100);
+            }
         }
+        
+        // Handle window errors
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error("Global error:", message);
+            return true; 
+        };
         
         // Start the game
         init();
