@@ -51,18 +51,17 @@
         const terrainSegmentWidth = 20;
         const terrainSegmentsOnScreen = Math.ceil(canvas.width / terrainSegmentWidth) + 5;
         let worldOffset = 0; // Tracks how far into the world we've moved
-        let leftmostIndex = 0; // Tracks the index of the leftmost terrain segment
+        let leftmostTerrainX = 0; // Track the leftmost point of our terrain
         
         // Generate initial terrain
         function generateInitialTerrain() {
             terrain.length = 0;
-            leftmostIndex = 0;
-            worldOffset = 0;
             
             // Generate more terrain than visible to allow for camera movement
             const initialSegments = terrainSegmentsOnScreen * 3;
             
-            for (let i = 0; i < initialSegments; i++) {
+            // Start with negative indices to have terrain to the left
+            for (let i = -initialSegments/2; i < initialSegments/2; i++) {
                 // Base height with multiple sine waves for more interesting terrain
                 let height = canvas.height - 100;
                 height += Math.sin(i * 0.1) * 30;
@@ -74,102 +73,106 @@
                 
                 terrain.push(height);
             }
+            
+            // Initialize leftmost terrain point
+            leftmostTerrainX = -initialSegments/2 * terrainSegmentWidth;
         }
         
         // Generate new terrain to the right
         function extendTerrainRight() {
             // Get the last terrain point's index
-            const lastIndex = leftmostIndex + terrain.length;
+            const lastIndex = terrain.length - 1;
+            const x = leftmostTerrainX + terrain.length * terrainSegmentWidth;
             
             // Generate a new terrain point
             let height = canvas.height - 100;
-            height += Math.sin(lastIndex * 0.1) * 30;
-            height += Math.sin(lastIndex * 0.05) * 50;
-            height += Math.sin(lastIndex * 0.02) * 20;
+            height += Math.sin(x * 0.1 / terrainSegmentWidth) * 30;
+            height += Math.sin(x * 0.05 / terrainSegmentWidth) * 50;
+            height += Math.sin(x * 0.02 / terrainSegmentWidth) * 20;
             height += Math.random() * 5 - 2.5;
             
             terrain.push(height);
             
-            // Remove one from the beginning to maintain array size
-            if (terrain.length > terrainSegmentsOnScreen * 3) {
+            // Remove one from the beginning if we're getting too large
+            if (terrain.length > terrainSegmentsOnScreen * 4) {
                 terrain.shift();
-                leftmostIndex++;
+                leftmostTerrainX += terrainSegmentWidth;
             }
         }
         
         // Generate new terrain to the left
         function extendTerrainLeft() {
             // Generate a new terrain point to the left
-            const newIndex = leftmostIndex - 1;
+            const x = leftmostTerrainX - terrainSegmentWidth;
             
-            // Generate height using the same algorithm as other terrain points
+            // Generate using the same formula for consistency
             let height = canvas.height - 100;
-            height += Math.sin(newIndex * 0.1) * 30;
-            height += Math.sin(newIndex * 0.05) * 50;
-            height += Math.sin(newIndex * 0.02) * 20;
+            height += Math.sin(x * 0.1 / terrainSegmentWidth) * 30;
+            height += Math.sin(x * 0.05 / terrainSegmentWidth) * 50;
+            height += Math.sin(x * 0.02 / terrainSegmentWidth) * 20;
             height += Math.random() * 5 - 2.5;
             
             terrain.unshift(height);
-            leftmostIndex--;
+            leftmostTerrainX = x;
             
-            // Remove one from the end to maintain array size
-            if (terrain.length > terrainSegmentsOnScreen * 3) {
+            // Remove one from the end if we're getting too large
+            if (terrain.length > terrainSegmentsOnScreen * 4) {
                 terrain.pop();
             }
         }
         
         // Get terrain height at any x position
         function getTerrainHeight(worldX) {
-            // Convert world coordinates to terrain array index
-            const terrainIndex = Math.floor(worldX / terrainSegmentWidth);
-            const relativeIndex = terrainIndex - leftmostIndex;
+            // Find which terrain segment this x position falls into
+            const segmentIndex = Math.floor((worldX - leftmostTerrainX) / terrainSegmentWidth);
             
-            // Ensure we're within terrain bounds
-            if (relativeIndex < 0) {
-                // We need to extend terrain to the left
-                while (relativeIndex < 0) {
+            // If we need terrain to the left, generate it
+            if (segmentIndex < 0) {
+                // Generate terrain to the left until we have what we need
+                while (segmentIndex < 0) {
                     extendTerrainLeft();
                 }
-                return getTerrainHeight(worldX); // Recursive call now that terrain is extended
+                return getTerrainHeight(worldX); // Recalculate now that we have the terrain
             }
             
-            if (relativeIndex >= terrain.length - 1) {
-                // We need to extend terrain to the right
-                while (relativeIndex >= terrain.length - 1) {
+            // If we need terrain to the right, generate it
+            if (segmentIndex >= terrain.length - 1) {
+                // Generate terrain to the right until we have what we need
+                while (segmentIndex >= terrain.length - 1) {
                     extendTerrainRight();
                 }
             }
             
-            // Now we can safely access the terrain array
-            const nextIndex = relativeIndex + 1;
+            // Calculate the exact height using linear interpolation
+            const nextSegmentIndex = Math.min(segmentIndex + 1, terrain.length - 1);
+            const segmentStartX = leftmostTerrainX + segmentIndex * terrainSegmentWidth;
+            const t = (worldX - segmentStartX) / terrainSegmentWidth;
             
-            // Calculate interpolation factor
-            const segmentStart = (leftmostIndex + relativeIndex) * terrainSegmentWidth;
-            const t = (worldX - segmentStart) / terrainSegmentWidth;
-            
-            // Interpolate between two terrain points
-            return terrain[relativeIndex] * (1 - t) + terrain[nextIndex] * t;
+            return terrain[segmentIndex] * (1 - t) + terrain[nextSegmentIndex] * t;
         }
         
         // Draw terrain
         function drawTerrain() {
-            // Calculate which segment is at the left edge of the screen
-            const screenLeft = camera.x;
-            const firstVisibleSegment = Math.floor(screenLeft / terrainSegmentWidth);
-            const relativeStartIndex = Math.max(0, firstVisibleSegment - leftmostIndex);
-            
             ctx.fillStyle = '#3b5323'; // Forest green
             ctx.beginPath();
             ctx.moveTo(0, canvas.height);
             
-            for (let i = 0; i < terrainSegmentsOnScreen + 2; i++) {
-                const relativeIndex = relativeStartIndex + i;
-                if (relativeIndex >= terrain.length) break;
-                
-                const segmentWorldX = (leftmostIndex + relativeIndex) * terrainSegmentWidth;
-                const x = segmentWorldX - camera.x;
-                const y = terrain[relativeIndex];
-                
+            // Calculate which segment of terrain is at the left edge of screen
+            const leftScreenWorldX = camera.x;
+            const rightScreenWorldX = camera.x + canvas.width;
+            
+            // Ensure we have terrain for the entire visible area
+            getTerrainHeight(leftScreenWorldX - terrainSegmentWidth);
+            getTerrainHeight(rightScreenWorldX + terrainSegmentWidth);
+            
+            // Find the starting segment for drawing
+            const startSegmentIndex = Math.floor((leftScreenWorldX - leftmostTerrainX) / terrainSegmentWidth) - 1;
+            const endSegmentIndex = Math.ceil((rightScreenWorldX - leftmostTerrainX) / terrainSegmentWidth) + 1;
+            
+            // Draw each terrain segment that's visible
+            for (let i = Math.max(0, startSegmentIndex); i <= Math.min(terrain.length - 1, endSegmentIndex); i++) {
+                const x = leftmostTerrainX + i * terrainSegmentWidth - camera.x;
+                const y = terrain[i];
                 ctx.lineTo(x, y);
             }
             
@@ -182,17 +185,11 @@
             ctx.lineWidth = 2;
             ctx.beginPath();
             
-            for (let i = 0; i < terrainSegmentsOnScreen + 1; i++) {
-                const relativeIndex = relativeStartIndex + i;
-                if (relativeIndex >= terrain.length - 1) break;
-                
-                const segmentWorldX1 = (leftmostIndex + relativeIndex) * terrainSegmentWidth;
-                const segmentWorldX2 = segmentWorldX1 + terrainSegmentWidth;
-                
-                const x1 = segmentWorldX1 - camera.x;
-                const y1 = terrain[relativeIndex];
-                const x2 = segmentWorldX2 - camera.x;
-                const y2 = terrain[relativeIndex + 1];
+            for (let i = Math.max(0, startSegmentIndex); i < Math.min(terrain.length - 1, endSegmentIndex); i++) {
+                const x1 = leftmostTerrainX + i * terrainSegmentWidth - camera.x;
+                const y1 = terrain[i];
+                const x2 = leftmostTerrainX + (i + 1) * terrainSegmentWidth - camera.x;
+                const y2 = terrain[i + 1];
                 
                 ctx.moveTo(x1, y1);
                 ctx.lineTo(x2, y2);
@@ -210,11 +207,6 @@
             speed: WALK_SPEED,
             direction: 1, // 1 for right, -1 for left
             legPhase: 0, // For walking animation
-            
-            // Add keyboard control to change direction
-            changeDirection: function() {
-                this.direction = -this.direction;
-            },
             
             // Legs
             leftLeg: {
@@ -363,66 +355,6 @@
             }
         };
         
-        // Initialize the game
-        function init() {
-            generateInitialTerrain();
-            
-            // Add keyboard control to change direction
-            document.addEventListener('keydown', function(e) {
-                if (e.code === 'Space') {
-                    character.changeDirection();
-                }
-            });
-            
-            animate();
-        }
-        
-        // Animation loop
-        function animate() {
-            // Update camera with smooth follow
-            camera.x += (camera.targetX - camera.x) * camera.smoothing;
-            
-            // Make sure we have enough terrain ahead
-            const screenRight = camera.x + canvas.width;
-            const rightmostSegmentX = (leftmostIndex + terrain.length - 1) * terrainSegmentWidth;
-            
-            while (rightmostSegmentX < screenRight + 200) {
-                extendTerrainRight();
-            }
-            
-            // Make sure we have enough terrain behind
-            const screenLeft = camera.x;
-            const leftmostSegmentX = leftmostIndex * terrainSegmentWidth;
-            
-            while (leftmostSegmentX > screenLeft - 200) {
-                extendTerrainLeft();
-            }
-            
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            // Draw sky gradient
-            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-            gradient.addColorStop(0, '#1e90ff');
-            gradient.addColorStop(1, '#87CEEB');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Draw clouds that move with the camera but at a parallax rate
-            drawClouds();
-            
-            drawTerrain();
-            character.update();
-            character.draw();
-            
-            // Display distance traveled
-            ctx.font = '16px Arial';
-            ctx.fillStyle = 'white';
-            ctx.fillText(`Distance traveled: ${Math.floor(character.worldX)} units`, 20, 30);
-            ctx.fillText(`Press SPACE to change direction`, 20, 60);
-            
-            requestAnimationFrame(animate);
-        }
-        
         // Cloud system
         const clouds = [];
         for (let i = 0; i < 10; i++) {
@@ -435,24 +367,66 @@
             });
         }
         
-        function drawClouds() {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        // Animation loop
+        function animate() {
+            // Update camera with smooth follow
+            camera.x += (camera.targetX - camera.x) * camera.smoothing;
             
-            for (const cloud of clouds) {
-                // Parallax effect - clouds move at a fraction of camera speed
-                const parallaxX = cloud.x - camera.x * 0.3;
+            // Make sure we have enough terrain ahead and behind
+            const leftScreenWorldX = camera.x - terrainSegmentWidth;
+            const rightScreenWorldX = camera.x + canvas.width + terrainSegmentWidth;
+            
+            // Get terrain height at these positions to ensure terrain exists
+            getTerrainHeight(leftScreenWorldX);
+            getTerrainHeight(rightScreenWorldX);
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw sky gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#1e90ff');
+            gradient.addColorStop(1, '#87CEEB');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw clouds that move with the camera but at a parallax rate
+            function drawClouds() {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
                 
-                // If cloud is too far left, move it far to the right
-                if (parallaxX < -cloud.width - 100) {
-                    cloud.x = camera.x * 0.3 + canvas.width + cloud.width + Math.random() * 200;
-                    cloud.y = Math.random() * 120 + 20;
+                for (const cloud of clouds) {
+                    // Parallax effect - clouds move at a fraction of camera speed
+                    const parallaxX = cloud.x - camera.x * 0.3;
+                    
+                    // If cloud is too far left, move it far to the right
+                    if (parallaxX < -cloud.width - 100) {
+                        cloud.x = camera.x * 0.3 + canvas.width + cloud.width + Math.random() * 200;
+                        cloud.y = Math.random() * 120 + 20;
+                    }
+                    
+                    // Draw the cloud
+                    ctx.beginPath();
+                    ctx.ellipse(parallaxX, cloud.y, cloud.width/2, cloud.height/2, 0, 0, Math.PI * 2);
+                    ctx.fill();
                 }
-                
-                // Draw the cloud
-                ctx.beginPath();
-                ctx.ellipse(parallaxX, cloud.y, cloud.width/2, cloud.height/2, 0, 0, Math.PI * 2);
-                ctx.fill();
             }
+            drawClouds();
+            
+            drawTerrain();
+            character.update();
+            character.draw();
+            
+            // Display distance traveled
+            ctx.font = '16px Arial';
+            ctx.fillStyle = 'white';
+            ctx.fillText(`Distance traveled: ${Math.floor(character.worldX)} units`, 20, 30);
+            
+            requestAnimationFrame(animate);
+        }
+        
+        // Initialize the game
+        function init() {
+            generateInitialTerrain();
+            animate();
         }
         
         // Start the game
