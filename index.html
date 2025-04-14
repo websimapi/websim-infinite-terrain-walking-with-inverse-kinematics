@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infinite Terrain Walking with Inverse Kinematics</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #333;
+        }
+        canvas {
+            background-color: #87CEEB;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas dimensions
+        canvas.width = 800;
+        canvas.height = 400;
+        
+        // Constants
+        const GRAVITY = 0.25;
+        const WALK_SPEED = 1.5;
+        const MAX_STEP_HEIGHT = 100;
+        const LEG_UPPER_LENGTH = 40;
+        const LEG_LOWER_LENGTH = 50;
+        const BODY_HEIGHT = 100;
+        const BODY_WIDTH = 15;
+        
+        // Camera and world tracking
+        const camera = {
+            x: 0,
+            targetX: 0,
+            smoothing: 0.1
+        };
+        
+        // Terrain
+        const terrain = [];
+        const terrainSegmentWidth = 20;
+        const terrainSegmentsOnScreen = Math.ceil(canvas.width / terrainSegmentWidth) + 5;
+        let worldOffset = 0; // Tracks how far into the world we've moved
+        
+        // Generate initial terrain
+        function generateInitialTerrain() {
+            terrain.length = 0;
+            
+            // Generate more terrain than visible to allow for camera movement
+            const initialSegments = terrainSegmentsOnScreen * 2;
+            
+            for (let i = 0; i < initialSegments; i++) {
+                // Base height with multiple sine waves for more interesting terrain
+                let height = canvas.height - 100;
+                height += Math.sin(i * 0.1) * 30;
+                height += Math.sin(i * 0.05) * 50;
+                height += Math.sin(i * 0.02) * 20;
+                
+                // Add some noise
+                height += Math.random() * 5 - 2.5;
+                
+                terrain.push(height);
+            }
+        }
+        
+        // Generate new terrain as needed
+        function extendTerrain() {
+            // Get the last terrain point's index
+            const lastIndex = terrain.length - 1;
+            
+            // Generate a new terrain point
+            let height = canvas.height - 100;
+            height += Math.sin(lastIndex * 0.1) * 30;
+            height += Math.sin(lastIndex * 0.05) * 50;
+            height += Math.sin(lastIndex * 0.02) * 20;
+            height += Math.random() * 5 - 2.5;
+            
+            terrain.push(height);
+            
+            // Remove one from the beginning to maintain array size
+            if (terrain.length > terrainSegmentsOnScreen * 3) {
+                terrain.shift();
+                worldOffset += terrainSegmentWidth;
+            }
+        }
+        
+        // Get terrain height at any x position
+        function getTerrainHeight(worldX) {
+            // Convert world coordinates to terrain array index
+            const adjustedX = worldX - worldOffset;
+            const index = Math.floor(adjustedX / terrainSegmentWidth);
+            
+            // Ensure we're within terrain bounds
+            if (index < 0) return terrain[0];
+            if (index >= terrain.length - 1) {
+                // If we're beyond current terrain, extend it
+                while (index >= terrain.length - 1) {
+                    extendTerrain();
+                }
+            }
+            
+            const nextIndex = Math.min(index + 1, terrain.length - 1);
+            const t = (adjustedX % terrainSegmentWidth) / terrainSegmentWidth;
+            
+            // Interpolate between two terrain points
+            return terrain[index] * (1 - t) + terrain[nextIndex] * t;
+        }
+        
+        // Draw terrain
+        function drawTerrain() {
+            const startIndex = Math.max(0, Math.floor(camera.x / terrainSegmentWidth));
+            
+            ctx.fillStyle = '#3b5323'; // Forest green
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height);
+            
+            for (let i = 0; i < terrainSegmentsOnScreen + 1; i++) {
+                const terrainIndex = startIndex + i;
+                if (terrainIndex >= terrain.length) break;
+                
+                const x = terrainIndex * terrainSegmentWidth - camera.x + worldOffset;
+                const y = terrain[terrainIndex];
+                ctx.lineTo(x, y);
+            }
+            
+            ctx.lineTo(canvas.width, canvas.height);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Draw grass
+            ctx.strokeStyle = '#4c7026';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            
+            for (let i = 0; i < terrainSegmentsOnScreen; i++) {
+                const terrainIndex = startIndex + i;
+                if (terrainIndex >= terrain.length - 1) break;
+                
+                const x1 = terrainIndex * terrainSegmentWidth - camera.x + worldOffset;
+                const y1 = terrain[terrainIndex];
+                const x2 = (terrainIndex + 1) * terrainSegmentWidth - camera.x + worldOffset;
+                const y2 = terrain[terrainIndex + 1];
+                
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+            }
+            
+            ctx.stroke();
+        }
+        
+        // Character
+        const character = {
+            worldX: 300, // Absolute position in the world
+            y: 0,
+            width: BODY_WIDTH,
+            height: BODY_HEIGHT,
+            speed: WALK_SPEED,
+            direction: 1, // 1 for right, -1 for left
+            legPhase: 0, // For walking animation
+            
+            // Legs
+            leftLeg: {
+                hipX: 0,
+                hipY: 0,
+                kneeX: 0,
+                kneeY: 0,
+                footX: 0,
+                footY: 0,
+                grounded: false,
+                phase: 0
+            },
+            rightLeg: {
+                hipX: 0,
+                hipY: 0,
+                kneeX: 0,
+                kneeY: 0,
+                footX: 0,
+                footY: 0,
+                grounded: false,
+                phase: Math.PI
+            },
+            
+            update: function() {
+                // Update position in world space
+                this.worldX += this.speed * this.direction;
+                
+                // Set character height based on terrain
+                const terrainY = getTerrainHeight(this.worldX);
+                this.y = terrainY - this.height;
+                
+                // Update leg phases
+                this.legPhase += 0.05;
+                this.leftLeg.phase = this.legPhase;
+                this.rightLeg.phase = this.legPhase + Math.PI;
+                
+                // Update legs
+                this.updateLeg(this.leftLeg, -this.width / 2);
+                this.updateLeg(this.rightLeg, this.width / 2);
+                
+                // Update camera target
+                camera.targetX = this.worldX - canvas.width / 2;
+            },
+            
+            updateLeg: function(leg, hipOffset) {
+                // Hip position (in world space)
+                const worldHipX = this.worldX + hipOffset;
+                leg.hipY = this.y + this.height * 0.4;
+                
+                // Calculate foot target
+                const strideLength = 30;
+                const footForwardOffset = Math.sin(leg.phase) * strideLength;
+                const worldFootX = worldHipX + footForwardOffset;
+                
+                // Get terrain height at foot x position
+                const terrainY = getTerrainHeight(worldFootX);
+                
+                // Set foot height based on stride phase
+                let footLiftHeight = 0;
+                if (Math.sin(leg.phase) < 0) {
+                    // Foot is in the air during back half of the stride
+                    footLiftHeight = Math.sin(leg.phase + Math.PI) * 20;
+                }
+                
+                const targetFootY = terrainY - footLiftHeight;
+                
+                // Store world coordinates
+                leg.worldHipX = worldHipX;
+                leg.worldFootX = worldFootX;
+                
+                // Convert world coordinates to screen coordinates for rendering
+                leg.hipX = worldHipX - camera.x;
+                leg.footY = targetFootY;
+                
+                // Solve inverse kinematics
+                const hipToFoot = {
+                    x: worldFootX - worldHipX,
+                    y: targetFootY - leg.hipY
+                };
+                
+                const hipToFootDistance = Math.sqrt(hipToFoot.x * hipToFoot.x + hipToFoot.y * hipToFoot.y);
+                
+                // Clamp distance to prevent overstretching
+                const maxDistance = LEG_UPPER_LENGTH + LEG_LOWER_LENGTH - 1;
+                const minDistance = Math.abs(LEG_UPPER_LENGTH - LEG_LOWER_LENGTH) + 1;
+                
+                let clampedDistance = Math.max(minDistance, Math.min(hipToFootDistance, maxDistance));
+                
+                // Calculate knee angle using law of cosines
+                const upperAngle = Math.atan2(hipToFoot.y, hipToFoot.x);
+                const kneeAngle = Math.acos(
+                    (LEG_UPPER_LENGTH * LEG_UPPER_LENGTH + clampedDistance * clampedDistance - LEG_LOWER_LENGTH * LEG_LOWER_LENGTH) / 
+                    (2 * LEG_UPPER_LENGTH * clampedDistance)
+                );
+                
+                // Calculate knee position (in world space)
+                const worldKneeX = worldHipX + Math.cos(upperAngle + kneeAngle) * LEG_UPPER_LENGTH;
+                leg.kneeY = leg.hipY + Math.sin(upperAngle + kneeAngle) * LEG_UPPER_LENGTH;
+                
+                // Convert to screen coordinates for rendering
+                leg.kneeX = worldKneeX - camera.x;
+                leg.footX = worldFootX - camera.x;
+            },
+            
+            draw: function() {
+                // Calculate screen position
+                const screenX = this.worldX - camera.x;
+                
+                // Draw legs
+                ctx.lineWidth = 8;
+                ctx.lineCap = 'round';
+                
+                // Draw left leg
+                ctx.strokeStyle = '#555';
+                ctx.beginPath();
+                ctx.moveTo(this.leftLeg.hipX, this.leftLeg.hipY);
+                ctx.lineTo(this.leftLeg.kneeX, this.leftLeg.kneeY);
+                ctx.lineTo(this.leftLeg.footX, this.leftLeg.footY);
+                ctx.stroke();
+                
+                // Draw right leg
+                ctx.beginPath();
+                ctx.moveTo(this.rightLeg.hipX, this.rightLeg.hipY);
+                ctx.lineTo(this.rightLeg.kneeX, this.rightLeg.kneeY);
+                ctx.lineTo(this.rightLeg.footX, this.rightLeg.footY);
+                ctx.stroke();
+                
+                // Draw body
+                ctx.fillStyle = '#444';
+                ctx.beginPath();
+                ctx.ellipse(screenX, this.y + this.height * 0.3, this.width, this.height * 0.3, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Draw head
+                ctx.fillStyle = '#666';
+                ctx.beginPath();
+                ctx.arc(screenX, this.y, 15, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Draw eyes (facing the direction of movement)
+                ctx.fillStyle = 'white';
+                const eyeOffset = 5 * this.direction;
+                ctx.beginPath();
+                ctx.arc(screenX + eyeOffset, this.y - 3, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        };
+        
+        // Initialize the game
+        function init() {
+            generateInitialTerrain();
+            animate();
+        }
+        
+        // Animation loop
+        function animate() {
+            // Update camera with smooth follow
+            camera.x += (camera.targetX - camera.x) * camera.smoothing;
+            
+            // Make sure we have enough terrain ahead
+            while ((camera.x + canvas.width + 200) > (terrain.length * terrainSegmentWidth + worldOffset)) {
+                extendTerrain();
+            }
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw sky gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#1e90ff');
+            gradient.addColorStop(1, '#87CEEB');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw clouds that move with the camera but at a parallax rate
+            drawClouds();
+            
+            drawTerrain();
+            character.update();
+            character.draw();
+            
+            // Display distance traveled
+            ctx.font = '16px Arial';
+            ctx.fillStyle = 'white';
+            ctx.fillText(`Distance traveled: ${Math.floor(character.worldX)} units`, 20, 30);
+            
+            requestAnimationFrame(animate);
+        }
+        
+        // Cloud system
+        const clouds = [];
+        for (let i = 0; i < 10; i++) {
+            clouds.push({
+                x: Math.random() * 2000 - 1000,
+                y: Math.random() * 120 + 20,
+                width: Math.random() * 100 + 50,
+                height: Math.random() * 40 + 20,
+                speed: Math.random() * 0.1 + 0.05
+            });
+        }
+        
+        function drawClouds() {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            
+            for (const cloud of clouds) {
+                // Parallax effect - clouds move at a fraction of camera speed
+                const parallaxX = cloud.x - camera.x * 0.3;
+                
+                // If cloud is too far left, move it far to the right
+                if (parallaxX < -cloud.width - 100) {
+                    cloud.x = camera.x * 0.3 + canvas.width + cloud.width + Math.random() * 200;
+                    cloud.y = Math.random() * 120 + 20;
+                }
+                
+                // Draw the cloud
+                ctx.beginPath();
+                ctx.ellipse(parallaxX, cloud.y, cloud.width/2, cloud.height/2, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        // Start the game
+        init();
+    </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
