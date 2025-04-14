@@ -51,13 +51,16 @@
         const terrainSegmentWidth = 20;
         const terrainSegmentsOnScreen = Math.ceil(canvas.width / terrainSegmentWidth) + 5;
         let worldOffset = 0; // Tracks how far into the world we've moved
+        let leftmostIndex = 0; // Tracks the index of the leftmost terrain segment
         
         // Generate initial terrain
         function generateInitialTerrain() {
             terrain.length = 0;
+            leftmostIndex = 0;
+            worldOffset = 0;
             
             // Generate more terrain than visible to allow for camera movement
-            const initialSegments = terrainSegmentsOnScreen * 2;
+            const initialSegments = terrainSegmentsOnScreen * 3;
             
             for (let i = 0; i < initialSegments; i++) {
                 // Base height with multiple sine waves for more interesting terrain
@@ -73,10 +76,10 @@
             }
         }
         
-        // Generate new terrain as needed
-        function extendTerrain() {
+        // Generate new terrain to the right
+        function extendTerrainRight() {
             // Get the last terrain point's index
-            const lastIndex = terrain.length - 1;
+            const lastIndex = leftmostIndex + terrain.length;
             
             // Generate a new terrain point
             let height = canvas.height - 100;
@@ -90,46 +93,83 @@
             // Remove one from the beginning to maintain array size
             if (terrain.length > terrainSegmentsOnScreen * 3) {
                 terrain.shift();
-                worldOffset += terrainSegmentWidth;
+                leftmostIndex++;
+            }
+        }
+        
+        // Generate new terrain to the left
+        function extendTerrainLeft() {
+            // Generate a new terrain point to the left
+            const newIndex = leftmostIndex - 1;
+            
+            // Generate height using the same algorithm as other terrain points
+            let height = canvas.height - 100;
+            height += Math.sin(newIndex * 0.1) * 30;
+            height += Math.sin(newIndex * 0.05) * 50;
+            height += Math.sin(newIndex * 0.02) * 20;
+            height += Math.random() * 5 - 2.5;
+            
+            terrain.unshift(height);
+            leftmostIndex--;
+            
+            // Remove one from the end to maintain array size
+            if (terrain.length > terrainSegmentsOnScreen * 3) {
+                terrain.pop();
             }
         }
         
         // Get terrain height at any x position
         function getTerrainHeight(worldX) {
             // Convert world coordinates to terrain array index
-            const adjustedX = worldX - worldOffset;
-            const index = Math.floor(adjustedX / terrainSegmentWidth);
+            const terrainIndex = Math.floor(worldX / terrainSegmentWidth);
+            const relativeIndex = terrainIndex - leftmostIndex;
             
             // Ensure we're within terrain bounds
-            if (index < 0) return terrain[0];
-            if (index >= terrain.length - 1) {
-                // If we're beyond current terrain, extend it
-                while (index >= terrain.length - 1) {
-                    extendTerrain();
+            if (relativeIndex < 0) {
+                // We need to extend terrain to the left
+                while (relativeIndex < 0) {
+                    extendTerrainLeft();
+                }
+                return getTerrainHeight(worldX); // Recursive call now that terrain is extended
+            }
+            
+            if (relativeIndex >= terrain.length - 1) {
+                // We need to extend terrain to the right
+                while (relativeIndex >= terrain.length - 1) {
+                    extendTerrainRight();
                 }
             }
             
-            const nextIndex = Math.min(index + 1, terrain.length - 1);
-            const t = (adjustedX % terrainSegmentWidth) / terrainSegmentWidth;
+            // Now we can safely access the terrain array
+            const nextIndex = relativeIndex + 1;
+            
+            // Calculate interpolation factor
+            const segmentStart = (leftmostIndex + relativeIndex) * terrainSegmentWidth;
+            const t = (worldX - segmentStart) / terrainSegmentWidth;
             
             // Interpolate between two terrain points
-            return terrain[index] * (1 - t) + terrain[nextIndex] * t;
+            return terrain[relativeIndex] * (1 - t) + terrain[nextIndex] * t;
         }
         
         // Draw terrain
         function drawTerrain() {
-            const startIndex = Math.max(0, Math.floor(camera.x / terrainSegmentWidth));
+            // Calculate which segment is at the left edge of the screen
+            const screenLeft = camera.x;
+            const firstVisibleSegment = Math.floor(screenLeft / terrainSegmentWidth);
+            const relativeStartIndex = Math.max(0, firstVisibleSegment - leftmostIndex);
             
             ctx.fillStyle = '#3b5323'; // Forest green
             ctx.beginPath();
             ctx.moveTo(0, canvas.height);
             
-            for (let i = 0; i < terrainSegmentsOnScreen + 1; i++) {
-                const terrainIndex = startIndex + i;
-                if (terrainIndex >= terrain.length) break;
+            for (let i = 0; i < terrainSegmentsOnScreen + 2; i++) {
+                const relativeIndex = relativeStartIndex + i;
+                if (relativeIndex >= terrain.length) break;
                 
-                const x = terrainIndex * terrainSegmentWidth - camera.x + worldOffset;
-                const y = terrain[terrainIndex];
+                const segmentWorldX = (leftmostIndex + relativeIndex) * terrainSegmentWidth;
+                const x = segmentWorldX - camera.x;
+                const y = terrain[relativeIndex];
+                
                 ctx.lineTo(x, y);
             }
             
@@ -142,14 +182,17 @@
             ctx.lineWidth = 2;
             ctx.beginPath();
             
-            for (let i = 0; i < terrainSegmentsOnScreen; i++) {
-                const terrainIndex = startIndex + i;
-                if (terrainIndex >= terrain.length - 1) break;
+            for (let i = 0; i < terrainSegmentsOnScreen + 1; i++) {
+                const relativeIndex = relativeStartIndex + i;
+                if (relativeIndex >= terrain.length - 1) break;
                 
-                const x1 = terrainIndex * terrainSegmentWidth - camera.x + worldOffset;
-                const y1 = terrain[terrainIndex];
-                const x2 = (terrainIndex + 1) * terrainSegmentWidth - camera.x + worldOffset;
-                const y2 = terrain[terrainIndex + 1];
+                const segmentWorldX1 = (leftmostIndex + relativeIndex) * terrainSegmentWidth;
+                const segmentWorldX2 = segmentWorldX1 + terrainSegmentWidth;
+                
+                const x1 = segmentWorldX1 - camera.x;
+                const y1 = terrain[relativeIndex];
+                const x2 = segmentWorldX2 - camera.x;
+                const y2 = terrain[relativeIndex + 1];
                 
                 ctx.moveTo(x1, y1);
                 ctx.lineTo(x2, y2);
@@ -167,6 +210,11 @@
             speed: WALK_SPEED,
             direction: 1, // 1 for right, -1 for left
             legPhase: 0, // For walking animation
+            
+            // Add keyboard control to change direction
+            changeDirection: function() {
+                this.direction = -this.direction;
+            },
             
             // Legs
             leftLeg: {
@@ -318,6 +366,14 @@
         // Initialize the game
         function init() {
             generateInitialTerrain();
+            
+            // Add keyboard control to change direction
+            document.addEventListener('keydown', function(e) {
+                if (e.code === 'Space') {
+                    character.changeDirection();
+                }
+            });
+            
             animate();
         }
         
@@ -327,8 +383,19 @@
             camera.x += (camera.targetX - camera.x) * camera.smoothing;
             
             // Make sure we have enough terrain ahead
-            while ((camera.x + canvas.width + 200) > (terrain.length * terrainSegmentWidth + worldOffset)) {
-                extendTerrain();
+            const screenRight = camera.x + canvas.width;
+            const rightmostSegmentX = (leftmostIndex + terrain.length - 1) * terrainSegmentWidth;
+            
+            while (rightmostSegmentX < screenRight + 200) {
+                extendTerrainRight();
+            }
+            
+            // Make sure we have enough terrain behind
+            const screenLeft = camera.x;
+            const leftmostSegmentX = leftmostIndex * terrainSegmentWidth;
+            
+            while (leftmostSegmentX > screenLeft - 200) {
+                extendTerrainLeft();
             }
             
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -351,6 +418,7 @@
             ctx.font = '16px Arial';
             ctx.fillStyle = 'white';
             ctx.fillText(`Distance traveled: ${Math.floor(character.worldX)} units`, 20, 30);
+            ctx.fillText(`Press SPACE to change direction`, 20, 60);
             
             requestAnimationFrame(animate);
         }
